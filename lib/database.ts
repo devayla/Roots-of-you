@@ -1,0 +1,1292 @@
+import clientPromise from './mongodb';
+import { getNeynarApiKey, NEYNAR_API_BASE_URL } from './neynar';
+import type { NeynarUser } from '@/types/neynar';
+
+// Helper function to verify address is associated with FID using Neynar API
+// Also checks if user has more than 20 followers (required for gift box claiming)
+async function verifyAddressForFid(address: string, fid: number): Promise<boolean> {
+  try {
+    const apiKey = getNeynarApiKey();
+    const url = `${NEYNAR_API_BASE_URL}/user/bulk/?fids=${fid}`;
+    
+    const neynarResponse = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'x-api-key': apiKey,
+      },
+    });
+    
+    if (!neynarResponse.ok) {
+      console.error('⚠️ Failed to verify address with Neynar API:', neynarResponse.status);
+      return false;
+    }
+    
+    const neynarData = await neynarResponse.json();
+    const user: NeynarUser | undefined = neynarData.users?.[0];
+    
+    if (!user) {
+      console.warn('⚠️ User not found in Neynar API for FID:', fid);
+      return false;
+    }
+    
+    // Check follower count first (must be > 20 for gift box claiming)
+    const followerCount = user.follower_count || 0;
+    if (followerCount <= 20) {
+      console.error('🚨 Security Alert: Follower count requirement not met', {
+        fid,
+        followerCount,
+        required: '> 20'
+      });
+      return false;
+    }
+    
+    const addressLower = address.toLowerCase();
+    let addressMatches = false;
+    
+    // Check if address matches custody address
+    if (user.custody_address?.toLowerCase() === addressLower) {
+      addressMatches = true;
+    }
+
+    // Check if address matches primary verified address
+    if (!addressMatches && user.verified_addresses?.primary?.eth_address?.toLowerCase() === addressLower) {
+      addressMatches = true;
+    }
+
+    // Check if address is in verified addresses list
+    if (!addressMatches) {
+      const verifiedAddresses = user.verified_addresses?.eth_addresses || [];
+      const isInVerifiedList = verifiedAddresses.some(
+        (addr: string) => addr.toLowerCase() === addressLower
+      );
+      if (isInVerifiedList) {
+        addressMatches = true;
+      }
+    }
+
+    // Check verifications array (legacy format)
+    if (!addressMatches) {
+      const verifications = user.verifications || [];
+      const isInVerifications = verifications.some(
+        (addr: string) => addr.toLowerCase() === addressLower
+      );
+      if (isInVerifications) {
+        addressMatches = true;
+      }
+    }
+    
+    if (!addressMatches) {
+      const verifiedAddresses = user.verified_addresses?.eth_addresses || [];
+      const verifications = user.verifications || [];
+      console.error('🚨 Security Alert: Address verification failed', {
+        fid,
+        providedAddress: address,
+        custodyAddress: user.custody_address?.toLowerCase(),
+        primaryAddress: user.verified_addresses?.primary?.eth_address?.toLowerCase(),
+        verifiedAddresses: verifiedAddresses.map((a: string) => a.toLowerCase()),
+        verifications: verifications.map((a: string) => a.toLowerCase())
+      });
+      return false;
+    }
+    
+    // Both address matches and follower count > 20
+    console.log('✅ Address and follower count verification passed', {
+      fid,
+      followerCount,
+      address: addressLower
+    });
+    return true;
+  } catch (error) {
+    console.error('⚠️ Error verifying address with Neynar API:', error);
+    return false;
+  }
+}
+
+export interface UserMint {
+  userAddress: string;
+  score: number;
+  timestamp: number;
+  tokenId?: number;
+  trait?: string;
+  signature: string;
+}
+
+export interface DailyMintCount {
+  userAddress: string;
+  date: string; // YYYY-MM-DD format
+  count: number;
+  lastMintTime: number;
+}
+
+export interface GameScore {
+  fid: number;
+  pfpUrl: string;
+  username?: string;
+  score: number; // All-time high (ATH) - only updated when beaten
+  currentSeasonScore?: number; // Current season score - updated every game
+  level: number;
+  userAddress?: string;
+  timestamp: number;
+  duration?: number; // Game duration in seconds
+  nftMinted?: boolean;
+  nftName?: string;
+  nftCount?: number; // Added for NFT tracking
+  lastNftMint?: number; // Added for NFT tracking
+  hasNft?: boolean; // Added for NFT tracking
+  faucetClaimed?: boolean; // Added for faucet tracking
+  hasMintedToday?: boolean; // Track if user has minted today
+  lastMintDate?: string; // YYYY-MM-DD format of last mint date
+  // Daily streak tracking
+  dailyStreak?: number; // Current daily streak count
+  lastPlayDate?: string; // YYYY-MM-DD format of last play date
+  longestStreak?: number; // Longest streak achieved
+}
+
+export interface FaucetClaim {
+  userAddress: string;
+  amount: string;
+  transactionHash: string;
+  timestamp: number;
+  blockNumber: number;
+  walletIndex?: number; // Which wallet was used (1-5)
+}
+
+export interface UsedAuthKey {
+  fusedKey: string;
+  randomString: string;
+  timestamp: number;
+  ipAddress: string;
+  createdAt: Date;
+}
+
+
+export interface GameSession {
+  userAddress: string;
+  fid?: number;
+  periodStartTime: number;
+  gamesPlayed: number;
+  lastGameTime: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface GiftBoxClaim {
+  userAddress: string;
+  fid?: number;
+  tokenType: 'usdc' | 'pepe' | 'crsh' | 'boop' | 'none';
+  amount: number;
+  timestamp: number;
+  signature?: string;
+  transactionHash?: string;
+  createdAt: Date;
+}
+
+export interface DailyGiftBoxCount {
+  userAddress: string;
+  date: string; // YYYY-MM-DD format
+  count: number;
+  lastClaimTime: number;
+}
+
+export interface FollowAction {
+  userAddress: string;
+  fid?: number;
+  platform: 'x' | 'twitter';
+  timestamp: number;
+  rewardClaimed: boolean;
+  createdAt: Date;
+}
+
+const GIFT_BOXES_PER_DAY = 1;
+
+// Follow action tracking functions
+export async function hasUserFollowed(userAddress: string, platform: 'x' | 'twitter' = 'x'): Promise<boolean> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const followAction = await db.collection('followActions').findOne({ 
+    userAddress, 
+    platform 
+  });
+  
+  return !!followAction;
+}
+
+export async function saveFollowAction(followData: Omit<FollowAction, 'createdAt'>): Promise<void> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  await db.collection('followActions').insertOne({
+    ...followData,
+    createdAt: new Date()
+  });
+}
+
+// Authentication key management functions
+export async function isAuthKeyUsed(fusedKey: string): Promise<boolean> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const usedKey = await db.collection('usedAuthKeys').findOne({ fusedKey });
+  return !!usedKey;
+}
+
+export async function storeUsedAuthKey(authKeyData: Omit<UsedAuthKey, 'createdAt'>): Promise<void> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  await db.collection('usedAuthKeys').insertOne({
+    ...authKeyData,
+    createdAt: new Date()
+  });
+}
+
+export async function cleanupOldAuthKeys(): Promise<void> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  // Remove keys older than 24 hours
+  const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  
+  await db.collection('usedAuthKeys').deleteMany({
+    createdAt: { $lt: twentyFourHoursAgo }
+  });
+}
+
+// Optional database validation for critical operations
+export async function validateAuthKeyInDatabase(fusedKey: string, randomString: string): Promise<boolean> {
+  try {
+    const isUsed = await isAuthKeyUsed(fusedKey);
+    if (isUsed) {
+      return false;
+    }
+    
+    // Store the key for future validation
+    await storeUsedAuthKey({
+      fusedKey,
+      randomString,
+      timestamp: Date.now(),
+      ipAddress: 'unknown' // Will be set by the calling API route
+    });
+    
+    return true;
+  } catch (error) {
+    console.error('Database validation error:', error);
+    return false;
+  }
+}
+
+export async function getUserDailyMintCount(userAddress: string): Promise<number> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+  
+  const dailyCount = await db.collection('dailyMints').findOne({
+    userAddress: userAddress.toLowerCase(),
+    date: today
+  });
+  
+  return dailyCount?.count || 0;
+}
+
+export async function incrementDailyMintCount(userAddress: string): Promise<void> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const today = new Date().toISOString().split('T')[0];
+  const now = Date.now();
+  
+  await db.collection('dailyMints').updateOne(
+    {
+      userAddress: userAddress.toLowerCase(),
+      date: today
+    },
+    {
+      $inc: { count: 1 },
+      $set: { lastMintTime: now },
+      $setOnInsert: { userAddress: userAddress.toLowerCase(), date: today }
+    },
+    { upsert: true }
+  );
+}
+
+export async function canUserMint(userAddress: string, dailyLimit: number = 5): Promise<boolean> {
+  const currentCount = await getUserDailyMintCount(userAddress);
+  return currentCount < dailyLimit;
+}
+
+export async function saveUserMint(mintData: UserMint): Promise<void> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  await db.collection('userMints').insertOne({
+    ...mintData,
+    userAddress: mintData.userAddress.toLowerCase(),
+    createdAt: new Date()
+  });
+}
+
+export async function getUserMintHistory(userAddress: string, limit: number = 50): Promise<UserMint[]> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const mints = await db.collection('userMints')
+    .find({ userAddress: userAddress.toLowerCase() })
+    .sort({ timestamp: -1 })
+    .limit(limit)
+    .toArray();
+  
+  return mints as unknown as UserMint[];
+}
+
+export async function getTotalMints(): Promise<number> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  return await db.collection('userMints').countDocuments();
+}
+
+export async function getTodayMints(): Promise<number> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  return await db.collection('userMints').countDocuments({
+    timestamp: { $gte: today.getTime() }
+  });
+}
+
+export async function getTopScores(limit: number = 10): Promise<Array<{ userAddress: string; score: number; timestamp: number }>> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const topScores = await db.collection('userMints')
+    .find({})
+    .sort({ score: -1 })
+    .limit(limit)
+    .project({ userAddress: 1, score: 1, timestamp: 1 })
+    .toArray();
+  
+  return topScores as Array<{ userAddress: string; score: number; timestamp: number }>;
+}
+
+export async function saveGameScore(gameScore: GameScore): Promise<void> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  // Check if player already exists
+  const existingPlayer = await db.collection('gameScores').findOne({ fid: gameScore.fid });
+  
+  if (existingPlayer) {
+    const newScore = gameScore.score;
+    
+    // Check if this is a new all-time high (score field)
+    const currentAth = existingPlayer.score || 0;
+    const newAth = Math.max(currentAth, newScore);
+    
+    // Check if this is a new current season high
+    const currentSeasonScore = existingPlayer.currentSeasonScore || 0;
+    const newCurrentSeasonScore = Math.max(currentSeasonScore, newScore);
+    
+    // Calculate daily streak
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+    const lastPlayDate = existingPlayer.lastPlayDate;
+    const currentStreak = existingPlayer.dailyStreak || 0;
+    const longestStreak = existingPlayer.longestStreak || 0;
+    
+    let newStreak = currentStreak;
+    let newLongestStreak = longestStreak;
+    
+    if (lastPlayDate === today) {
+      // Already played today, keep current streak
+      newStreak = currentStreak;
+    } else if (lastPlayDate) {
+      // Check if yesterday was played (consecutive day)
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split('T')[0];
+      
+      if (lastPlayDate === yesterdayStr) {
+        // Consecutive day, increment streak
+        newStreak = currentStreak + 1;
+      } else {
+        // Streak broken, reset to 1
+        newStreak = 1;
+      }
+    } else {
+      // First time playing, start streak at 1
+      newStreak = 1;
+    }
+    
+    // Update longest streak if current streak is higher
+    if (newStreak > longestStreak) {
+      newLongestStreak = newStreak;
+    }
+    
+    // Prepare update fields
+    const updateFields: any = {
+      pfpUrl: gameScore.pfpUrl,
+      username: gameScore.username,
+      timestamp: gameScore.timestamp,
+      updatedAt: new Date(),
+      dailyStreak: newStreak,
+      lastPlayDate: today,
+      longestStreak: newLongestStreak
+    };
+    
+    // Only update currentSeasonScore if it's a new season high
+    if (newScore > currentSeasonScore) {
+      updateFields.currentSeasonScore = newScore;
+      // Only update duration when current season score improves
+      if (gameScore.duration !== undefined) {
+        updateFields.duration = gameScore.duration;
+      }
+    }
+    
+    // Only update score (ATH) if it's a new all-time high
+    if (newScore > currentAth) {
+      updateFields.score = newScore;
+    }
+    
+    // Update level if it's higher than existing
+    if (gameScore.level > (existingPlayer.level || 0)) {
+      updateFields.level = gameScore.level;
+    }
+    
+    // Always update userAddress if provided
+    if (gameScore.userAddress) {
+      updateFields.userAddress = gameScore.userAddress;
+    }
+    
+    await db.collection('gameScores').updateOne(
+      { fid: gameScore.fid },
+      { $set: updateFields }
+    );
+    
+    if (newScore > currentAth) {
+      console.log(`Updated player ${gameScore.fid} with new ATH: ${newScore}, level: ${gameScore.level}, streak: ${newStreak}`);
+    } else if (newScore > currentSeasonScore) {
+      console.log(`Updated player ${gameScore.fid} with new current season score: ${newScore}, level: ${gameScore.level}, streak: ${newStreak}`);
+    } else {
+      console.log(`Updated player ${gameScore.fid} profile info - level: ${gameScore.level}, streak: ${newStreak}`);
+    }
+  } else {
+    // Create new player record with both scores initialized
+    const today = new Date().toISOString().split('T')[0];
+    const newPlayerData = {
+      ...gameScore,
+      currentSeasonScore: gameScore.score,
+      dailyStreak: 1,
+      lastPlayDate: today,
+      longestStreak: 1,
+      createdAt: new Date()
+    };
+    
+    await db.collection('gameScores').insertOne(newPlayerData);
+    console.log(`Created new player ${gameScore.fid} with score: ${gameScore.score}, streak: 1`);
+  }
+}
+
+export async function getLeaderboard(limit: number = 50): Promise<GameScore[]> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  // const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+  
+  const leaderboard = await db.collection('gameScores')
+    .find({ 
+      currentSeasonScore: { $exists: true }
+      // hasMintedToday: true, // COMMENTED OUT: This was causing daily reset
+      // lastMintDate: today   // COMMENTED OUT: This was causing daily reset
+    })
+    .sort({ currentSeasonScore: -1 })
+    .limit(limit)
+    .toArray();
+  
+  return leaderboard as unknown as GameScore[];
+}
+
+export async function getUserBestScore(fid: number): Promise<GameScore | null> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const bestScore = await db.collection('gameScores')
+    .findOne(
+      { fid, currentSeasonScore: { $exists: true } },
+      { sort: { currentSeasonScore: -1 } }
+    );
+  
+  return bestScore as GameScore | null;
+}
+
+// Get user streak data
+export async function getUserStreakData(fid: number): Promise<{ dailyStreak: number; longestStreak: number; lastPlayDate: string | null } | null> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const userData = await db.collection('gameScores').findOne(
+    { fid: fid },
+    { projection: { dailyStreak: 1, longestStreak: 1, lastPlayDate: 1 } }
+  );
+  
+  if (!userData) {
+    return null;
+  }
+  
+  return {
+    dailyStreak: userData.dailyStreak || 0,
+    longestStreak: userData.longestStreak || 0,
+    lastPlayDate: userData.lastPlayDate || null
+  };
+} 
+
+// NFT minting tracking functions
+export async function incrementUserNftCount(fid: number): Promise<void> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  await db.collection('gameScores').updateOne(
+    { fid },
+    { 
+      $inc: { nftCount: 1 },
+      $set: { lastNftMint: Date.now() }
+    },
+    { upsert: true }
+  );
+}
+
+export async function getUserNftCount(fid: number): Promise<number> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const userData = await db.collection('gameScores').findOne({ fid });
+  return userData?.nftCount || 0;
+}
+
+export async function updateUserNftInfo(fid: number, nftName: string): Promise<void> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  await db.collection('gameScores').updateOne(
+    { fid },
+    { 
+      $set: { 
+        nftName,
+        hasNft: true,
+        lastNftMint: Date.now()
+      }
+    },
+    { upsert: true }
+  );
+}
+
+export async function getLeaderboardWithNfts(limit: number = 50): Promise<GameScore[]> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  // Get all game scores with NFT data, filter out users without NFTs
+  const leaderboard = await db.collection('gameScores')
+    .find({ hasNft: true }) // Only get users who have minted NFTs
+    .sort({ score: -1 })
+    .limit(limit)
+    .toArray();
+  
+  return leaderboard as unknown as GameScore[];
+}
+
+export async function getMixedLeaderboard(limit: number = 50, offset: number = 0): Promise<GameScore[]> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  // const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+  
+  // Get players with currentSeasonScore who have minted today, sorted by currentSeasonScore
+  const allPlayers = await db.collection('gameScores')
+    .find({ 
+      currentSeasonScore: { $exists: true }
+      // hasMintedToday: true, // COMMENTED OUT: This was causing daily reset
+      // lastMintDate: today   // COMMENTED OUT: This was causing daily reset
+    })
+    .sort({ currentSeasonScore: -1 })
+    .toArray();
+  
+  // Remove duplicates by fid (keep highest currentSeasonScore for each user)
+  const uniquePlayers = new Map();
+  allPlayers.forEach(player => {
+    const existing = uniquePlayers.get(player.fid);
+    if (!existing || (player.currentSeasonScore || 0) > (existing.currentSeasonScore || 0)) {
+      uniquePlayers.set(player.fid, player);
+    }
+  });
+  
+  const uniquePlayersList = Array.from(uniquePlayers.values()).sort((a, b) => (b.currentSeasonScore || 0) - (a.currentSeasonScore || 0));
+  
+  // Separate NFT holders and non-NFT holders
+  const nftHolders = uniquePlayersList.filter(player => player.hasNft === true && player.nftCount > 0);
+  const nonNftHolders = uniquePlayersList.filter(player => !player.hasNft || !player.nftCount || player.nftCount === 0);
+  
+  // Ensure top 10 are NFT holders, then add others
+  const top10NftHolders = nftHolders.slice(0, 10);
+  const remainingNftHolders = nftHolders.slice(10);
+  
+  // Combine remaining players and sort by currentSeasonScore
+  const othersPool = [...remainingNftHolders, ...nonNftHolders].sort((a, b) => (b.currentSeasonScore || 0) - (a.currentSeasonScore || 0));
+  
+  // Final leaderboard: top 10 NFT holders + others
+  const finalLeaderboard = [
+    ...top10NftHolders,
+    ...othersPool
+  ];
+  
+  // Apply pagination (offset and limit)
+  const paginatedResult = finalLeaderboard.slice(offset, offset + limit);
+  
+  // Additional deduplication check to ensure no duplicates in the result
+  const seenFids = new Set();
+  const deduplicatedResult = paginatedResult.filter(player => {
+    if (seenFids.has(player.fid)) {
+      console.log(`Duplicate FID found and removed: ${player.fid} (${player.username || 'Unknown'})`);
+      return false;
+    }
+    seenFids.add(player.fid);
+    return true;
+  });
+  
+  // Log pagination info for debugging
+  console.log(`getMixedLeaderboard: offset=${offset}, limit=${limit}, total=${finalLeaderboard.length}, returned=${deduplicatedResult.length}`);
+  
+  return deduplicatedResult as unknown as GameScore[];
+}
+
+export async function getTotalPlayersCount(): Promise<number> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  // const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+  
+  // Get unique player count by counting distinct fids who have currentSeasonScore and minted today
+  const totalPlayers = await db.collection('gameScores').distinct('fid', { 
+    currentSeasonScore: { $exists: true }
+    // hasMintedToday: true, // COMMENTED OUT: This was causing daily reset
+    // lastMintDate: today   // COMMENTED OUT: This was causing daily reset
+  });
+  return totalPlayers.length;
+}
+
+// Faucet functions
+export async function saveFaucetClaim(faucetData: FaucetClaim): Promise<void> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  // Save to faucet claims collection
+  await db.collection('faucetClaims').insertOne({
+    ...faucetData,
+    createdAt: new Date()
+  });
+  
+  // Also mark in gameScores that this user has claimed faucet
+  await db.collection('gameScores').updateMany(
+    { userAddress: faucetData.userAddress },
+    { $set: { faucetClaimed: true } }
+  );
+}
+
+export async function hasUserClaimedFaucet(userAddress: string): Promise<boolean> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  // Check in faucet claims collection
+  const faucetClaim = await db.collection('faucetClaims').findOne({ userAddress });
+  if (faucetClaim) {
+    return true;
+  }
+  
+  // Also check in gameScores collection
+  const gameScore = await db.collection('gameScores').findOne({ 
+    userAddress, 
+    faucetClaimed: true 
+  });
+  
+  return !!gameScore;
+}
+
+export async function getUserFaucetClaim(userAddress: string): Promise<FaucetClaim | null> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const faucetClaim = await db.collection('faucetClaims').findOne({ userAddress });
+  return faucetClaim as FaucetClaim | null;
+}
+
+export async function getWalletUsageStats(): Promise<Array<{ walletIndex: number; usageCount: number; totalAmount: string }>> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const stats = await db.collection('faucetClaims').aggregate([
+    {
+      $group: {
+        _id: '$walletIndex',
+        usageCount: { $sum: 1 },
+        totalAmount: { $sum: { $toDouble: '$amount' } }
+      }
+    },
+    {
+      $project: {
+        walletIndex: '$_id',
+        usageCount: 1,
+        totalAmount: { $toString: '$totalAmount' }
+      }
+    },
+    { $sort: { walletIndex: 1 } }
+  ]).toArray();
+  
+  return stats as Array<{ walletIndex: number; usageCount: number; totalAmount: string }>;
+}
+
+// Migration function to update existing data with new scoring fields
+export async function migrateToNewScoringSystem(): Promise<void> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  console.log('Starting migration to new scoring system...');
+  
+  // Find all documents that don't have currentSeasonScore field
+  const documentsToUpdate = await db.collection('gameScores').find({
+    currentSeasonScore: { $exists: false }
+  }).toArray();
+  
+  console.log(`Found ${documentsToUpdate.length} documents to migrate`);
+  
+  for (const doc of documentsToUpdate) {
+    const legacyScore = doc.score || 0;
+    
+    await db.collection('gameScores').updateOne(
+      { _id: doc._id },
+      {
+        $set: {
+          currentSeasonScore: legacyScore
+        }
+      }
+    );
+  }
+  
+  console.log('Migration completed successfully');
+}
+
+// Get all-time high leaderboard
+export async function getAllTimeHighLeaderboard(limit: number = 50, offset: number = 0): Promise<GameScore[]> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  // Get all players with ATH scores, regardless of current season
+  const leaderboard = await db.collection('gameScores')
+    .find({ 
+      score: { $exists: true, $gt: 0 }
+    })
+    .sort({ score: -1 })
+    .skip(offset)
+    .limit(limit)
+    .toArray();
+  
+  return leaderboard as unknown as GameScore[];
+}
+
+// Get total ATH players count
+export async function getTotalAthPlayersCount(): Promise<number> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  // Get unique player count by counting distinct fids who have ATH scores
+  const totalPlayers = await db.collection('gameScores').distinct('fid', { 
+    score: { $exists: true, $gt: 0 }
+  });
+  return totalPlayers.length;
+}
+
+// Get user's game data by address
+export async function getUserGameDataByAddress(userAddress: string): Promise<GameScore | null> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const userData = await db.collection('gameScores')
+    .findOne(
+      { userAddress: userAddress }
+    );
+  
+  return userData as GameScore | null;
+}
+
+// Check if user has minted today
+export async function hasUserMintedToday(userAddress: string): Promise<boolean> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+  
+  const userData = await db.collection('gameScores')
+    .findOne(
+      { 
+        userAddress: userAddress,
+        hasMintedToday: true,
+        lastMintDate: today
+      }
+    );
+  
+  return !!userData;
+}
+
+// Update user's daily mint status
+export async function updateUserDailyMintStatus(userAddress: string, hasMinted: boolean = true): Promise<void> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+  
+  await db.collection('gameScores').updateMany(
+    { userAddress: userAddress },
+    {
+      $set: {
+        hasMintedToday: hasMinted,
+        lastMintDate: today,
+        updatedAt: new Date()
+      }
+    }
+  );
+}
+
+// Reset daily mint status for all users (run daily)
+export async function resetDailyMintStatus(): Promise<void> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  await db.collection('gameScores').updateMany(
+    { hasMintedToday: true },
+    {
+      $set: {
+        hasMintedToday: false,
+        updatedAt: new Date()
+      }
+    }
+  );
+} 
+
+export async function canUserClaimGiftBox(userAddress: string, fid?: number): Promise<{
+  canClaim: boolean;
+  claimsToday: number;
+  remainingClaims: number;
+  lastClaimTime?: number;
+}> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const currentTime = Date.now();
+  
+  console.log('🔍 canUserClaimGiftBox - searching for user by FID:', fid);
+  
+  // Find user's game score record by FID (more reliable)
+  const userData = await db.collection('gameScores').findOne({
+    fid: fid
+  });
+  
+  console.log('🔍 canUserClaimGiftBox - found userData:', {
+    exists: !!userData,
+    userAddress: userData?.userAddress,
+    lastGiftBoxUpdate: userData?.lastGiftBoxUpdate,
+    giftBoxClaimsInPeriod: userData?.giftBoxClaimsInPeriod
+  });
+  
+  if (!userData) {
+    // User doesn't exist in gameScores, can claim
+    console.log('🔍 canUserClaimGiftBox - user not found, can claim');
+    return {
+      canClaim: true,
+      claimsToday: 0,
+      remainingClaims: GIFT_BOXES_PER_DAY,
+      lastClaimTime: undefined
+    };
+  }
+  
+  // Check if last gift box claim was more than 24 hours ago
+  const lastGiftBoxUpdate = userData.lastGiftBoxUpdate || 0;
+  const claimsInPeriod = userData.giftBoxClaimsInPeriod || 0;
+  
+  console.log('🔍 canUserClaimGiftBox - current values:', {
+    lastGiftBoxUpdate,
+    claimsInPeriod,
+    currentTime,
+    timeDiff: currentTime - lastGiftBoxUpdate
+  });
+  
+  if (currentTime >= lastGiftBoxUpdate + (24 * 60 * 60 * 1000)) {
+    // 24 hours have passed, reset counter
+    console.log('🔍 canUserClaimGiftBox - 24 hours passed, resetting');
+    return {
+      canClaim: true,
+      claimsToday: 0,
+      remainingClaims: GIFT_BOXES_PER_DAY,
+      lastClaimTime: lastGiftBoxUpdate
+    };
+  }
+  
+  // Check if user has claims remaining in current 24-hour period
+  const canClaim = claimsInPeriod < GIFT_BOXES_PER_DAY;
+  
+  console.log('🔍 canUserClaimGiftBox - result:', {
+    canClaim,
+    claimsToday: claimsInPeriod,
+    remainingClaims: Math.max(0, GIFT_BOXES_PER_DAY - claimsInPeriod)
+  });
+  
+  return {
+    canClaim,
+    claimsToday: claimsInPeriod,
+    remainingClaims: Math.max(0, GIFT_BOXES_PER_DAY - claimsInPeriod),
+    lastClaimTime: lastGiftBoxUpdate
+  };
+}
+
+export async function canUserSeeGiftBox(userAddress: string, fid?: number): Promise<{
+  canSee: boolean;
+  claimsToday: number;
+  remainingClaims: number;
+  lastClaimTime?: number;
+}> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const currentTime = Date.now();
+  
+  // Find user's game score record by FID
+  const userData = await db.collection('gameScores').findOne({
+    fid: fid
+  });
+  
+  if (!userData) {
+    // User doesn't exist in gameScores, can see gift box
+    return {
+      canSee: true,
+      claimsToday: 0,
+      remainingClaims: GIFT_BOXES_PER_DAY,
+      lastClaimTime: undefined
+    };
+  }
+  
+  // Check if last gift box claim was more than 24 hours ago
+  const lastGiftBoxUpdate = userData.lastGiftBoxUpdate || 0;
+  const claimsInPeriod = userData.giftBoxClaimsInPeriod || 0;
+  
+  if (currentTime >= lastGiftBoxUpdate + (24 * 60 * 60 * 1000)) {
+    // 24 hours have passed, reset counter
+    return {
+      canSee: true,
+      claimsToday: 0,
+      remainingClaims: GIFT_BOXES_PER_DAY,
+      lastClaimTime: lastGiftBoxUpdate
+    };
+  }
+  
+  // Check if user has claims remaining in current 24-hour period
+  const canSee = claimsInPeriod < GIFT_BOXES_PER_DAY;
+  
+  return {
+    canSee,
+    claimsToday: claimsInPeriod,
+    remainingClaims: Math.max(0, GIFT_BOXES_PER_DAY - claimsInPeriod),
+    lastClaimTime: lastGiftBoxUpdate
+  };
+}
+
+export async function generateGiftBoxReward(score: number = 0): Promise<{
+  tokenType: 'usdc' | 'pepe' | 'crsh' | 'boop' | 'none';
+  amount: number;
+}> {
+  // Calculate "better luck next time" probability based on score
+  let betterLuckProbability = 1; // Default 50%
+  
+  
+    const usdcAmount =  (0.01 + (Math.random() * 0.02));
+    console.log(`🎁 Gift Box: USDC reward! (${(betterLuckProbability * 100).toFixed(1)}% chance) - Amount: ${usdcAmount.toFixed(6)} - Score: ${score.toLocaleString()}`);
+    return { tokenType: 'usdc', amount: parseFloat(usdcAmount.toFixed(6)) };
+}
+
+export async function claimGiftBox(userAddress: string, fid?: number): Promise<{
+  success: boolean;
+  tokenType: 'usdc' | 'pepe' | 'crsh' | 'boop' | 'none';
+  amount: number;
+  amountInWei?: string;
+  signature?: string;
+  claimsToday: number;
+  remainingClaims: number;
+  username?: string;
+  pfpUrl?: string;
+  score?: number;
+}> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const userAddressLower = userAddress;
+  
+  // Check if user can claim
+  const canClaim = await canUserClaimGiftBox(userAddress, fid);
+  if (!canClaim.canClaim) {
+    return {
+      success: false,
+      tokenType: 'none',
+      amount: 0,
+      claimsToday: canClaim.claimsToday,
+      remainingClaims: canClaim.remainingClaims
+    };
+  }
+  
+  // Get user's best score for reward calculation and user data
+  let userBestScore = 0;
+  let username: string | undefined;
+  let pfpUrl: string | undefined;
+  if (fid) {
+    try {
+      const userGameData = await db.collection('gameScores').findOne(
+        { fid: fid },
+        { sort: { score: -1 } }
+      );
+      userBestScore = userGameData?.currentSeasonScore || 0;
+      username = userGameData?.username;
+      pfpUrl = userGameData?.pfpUrl;
+      console.log(`🎯 User best score for gift box calculation: ${userBestScore.toLocaleString()}`);
+    } catch (error) {
+      console.log('⚠️ Error getting user score for gift box, using 0:', error);
+      userBestScore = 0;
+    }
+  }
+  
+  // Generate reward based on user's score
+  const reward = await generateGiftBoxReward(userBestScore);
+  
+  // Update gift box claims in gameScores collection
+  const currentTime = Date.now();
+  const lastGiftBoxUpdate = canClaim.lastClaimTime || 0;
+  const claimsInPeriod = canClaim.claimsToday;
+  
+  console.log('🔍 Claiming gift box - Debug info:', {
+    userAddress: userAddressLower,
+    lastGiftBoxUpdate,
+    claimsInPeriod,
+    currentTime,
+    timeDiff: currentTime - lastGiftBoxUpdate,
+    twentyFourHours: 24 * 60 * 60 * 1000
+  });
+  
+  // Check if we need to reset the counter (24 hours passed)
+  let newClaimsInPeriod = 1;
+  let newLastGiftBoxUpdate = currentTime;
+  
+  if (lastGiftBoxUpdate === 0) {
+    // First time claiming - start with 1
+    newClaimsInPeriod = 1;
+    newLastGiftBoxUpdate = currentTime;
+    console.log('🎯 First time claiming - starting with 1');
+  } else if (currentTime >= lastGiftBoxUpdate + (24 * 60 * 60 * 1000)) {
+    // 24 hours have passed, start new period
+    newClaimsInPeriod = 1;
+    newLastGiftBoxUpdate = currentTime;
+    console.log('🔄 24 hours passed - resetting counter to 1');
+  } else {
+    // User already claimed in last 24 hours
+    newClaimsInPeriod = 1; // Keep at 1 since limit is 1 per 24 hours
+    newLastGiftBoxUpdate = lastGiftBoxUpdate; // Don't update time if already claimed
+    console.log(`⏰ Already claimed in last 24 hours - cannot claim again`);
+  }
+  
+  console.log('💾 Updating database with:', {
+    userAddress: userAddressLower,
+    newClaimsInPeriod,
+    newLastGiftBoxUpdate
+  });
+  
+  const updateResult = await db.collection('gameScores').updateOne(
+    { fid: fid },
+    {
+      $set: {
+        giftBoxClaimsInPeriod: newClaimsInPeriod,
+        lastGiftBoxUpdate: newLastGiftBoxUpdate,
+        updatedAt: new Date()
+      },
+      $inc: {
+        totalRewardsClaimed: 1
+      }
+    },
+    { upsert: true }
+  );
+  
+  console.log('✅ Database update result:', {
+    matchedCount: updateResult.matchedCount,
+    modifiedCount: updateResult.modifiedCount,
+    upsertedCount: updateResult.upsertedCount
+  });
+  
+  // Store the claim
+  const giftBoxClaim: GiftBoxClaim = {
+    userAddress: userAddressLower,
+    fid,
+    tokenType: reward.tokenType,
+    amount: reward.amount,
+    timestamp: Date.now(),
+    createdAt: new Date()
+  };
+  
+  await db.collection('giftBoxClaims').insertOne(giftBoxClaim);
+  
+  // Generate signature for token reward (only if not "none")
+  let signature: string | undefined;
+  if (reward.tokenType !== 'none') {
+    // SECURITY CHECK: Verify that the address is associated with the FID using Neynar API
+    if (!fid) {
+      console.error('❌ Security check failed: FID is required to verify address ownership');
+      throw new Error('FID is required for token rewards');
+    }
+
+    const isAddressVerified = await verifyAddressForFid(userAddressLower, fid);
+    if (!isAddressVerified) {
+      console.error('❌ Security check failed: Address is not associated with FID', {
+        address: userAddressLower,
+        fid: fid
+      });
+      throw new Error('Address verification failed: Address is not associated with this FID');
+    }
+
+    console.log('✅ Security check passed: Address verified for FID', {
+      address: userAddressLower,
+      fid: fid
+    });
+
+    const { ethers } = await import('ethers');
+    const serverPrivateKey = process.env.SIGNER_PRIVATE_KEY;
+    
+    // Convert amount to token units (6 decimals for USDC, 18 for others)
+    const amountInWei = convertToTokenUnits(reward.amount, reward.tokenType);
+    
+    console.log('Signature data:', {
+      userAddress: userAddressLower,
+      tokenAddress: getTokenAddress(reward.tokenType),
+      amount: reward.amount,
+      amountInWei: amountInWei
+    });
+    console.log(serverPrivateKey)
+    if (serverPrivateKey) {
+      const wallet = new ethers.Wallet(serverPrivateKey);
+
+      const packedData = ethers.solidityPacked(
+        ["address", "address", "uint256"],
+        [userAddressLower, getTokenAddress(reward.tokenType), amountInWei]
+      );
+      const messageHash = ethers.keccak256(packedData);
+      
+      signature = await wallet.signMessage(ethers.getBytes(messageHash));
+    }
+  }
+  
+  return {
+    success: true,
+    tokenType: reward.tokenType,
+    amount: reward.amount,
+    amountInWei: reward.tokenType !== 'none' ? convertToTokenUnits(reward.amount, reward.tokenType).toString() : '0',
+    signature,
+    claimsToday: newClaimsInPeriod,
+    remainingClaims: Math.max(0, GIFT_BOXES_PER_DAY - newClaimsInPeriod),
+    username,
+    pfpUrl,
+    score: userBestScore
+  };
+}
+
+function getTokenAddress(tokenType: 'usdc' | 'pepe' | 'crsh' | 'boop' | 'none'): string {
+  // These should match your actual token contract addresses
+  switch (tokenType) {
+    case 'usdc':
+      return '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'; // USDC token address on Base
+    case 'pepe':
+      return '0x25d887Ce7a35172C62FeBFD67a1856F20FaEbB00'; // PEPE token address
+    case 'crsh':
+      return '0xe461003E78A7bF4F14F0D30b3ac490701980aB07';
+    case "boop":
+      return '0x13A7DeDb7169a17bE92B0E3C7C2315B46f4772B3'
+    case 'none':
+      throw new Error('Cannot get token address for "none" type');
+    default:
+      throw new Error('Invalid token type');
+  }
+}
+
+function convertToTokenUnits(amount: number, tokenType: 'usdc' | 'pepe' | 'crsh' | 'boop' | 'none'): bigint {
+  // USDC uses 6 decimals, other tokens use 18 decimals
+  const decimals = tokenType === 'usdc' ? 6 : 18;
+  return BigInt(Math.floor(amount * Math.pow(10, decimals)));
+}
+
+
+
+export async function getUserGiftBoxStats(userAddress: string, fid?: number): Promise<{
+  totalClaims: number;
+  totalUsdc: number;
+  totalPepe: number;
+  totalBoop: number;
+  totalCrsh: number;
+  claimsToday: number;
+  remainingClaims: number;
+  totalRewardsClaimed: number;
+}> {
+  const client = await clientPromise;
+  const db = client.db('chaincrush');
+  
+  const userAddressLower = userAddress.toLowerCase();
+  const currentTime = Date.now();
+  
+  // Get user's game score record by FID
+  const userData = await db.collection('gameScores').findOne({
+    fid: fid
+  });
+  
+  // Get current period claims
+  let claimsToday = 0;
+  if (userData) {
+    const lastGiftBoxUpdate = userData.lastGiftBoxUpdate || 0;
+    const claimsInPeriod = userData.giftBoxClaimsInPeriod || 0;
+    
+    // Check if 24 hours have passed since last update
+    if (currentTime >= lastGiftBoxUpdate + (24 * 60 * 60 * 1000)) {
+      claimsToday = 0; // Reset if 24 hours passed
+    } else {
+      claimsToday = claimsInPeriod;
+    }
+  }
+  
+  // Get all-time stats from giftBoxClaims collection
+  const allClaims = await db.collection('giftBoxClaims').find({
+    userAddress: userAddressLower
+  }).toArray();
+  
+  let totalUsdc = 0;
+  let totalPepe = 0;
+  let totalCrsh = 0;
+  let totalBoop = 0;
+  
+  allClaims.forEach(claim => {
+    if (claim.tokenType === 'usdc') totalUsdc += claim.amount;
+    else if (claim.tokenType === 'pepe') totalPepe += claim.amount;
+    else if (claim.tokenType === 'boop') totalBoop += claim.amount;
+    else if (claim.tokenType === 'crsh') totalCrsh += claim.amount;
+  });
+  
+  return {
+    totalClaims: allClaims.length,
+    totalUsdc,
+    totalPepe,
+    totalBoop,
+    totalCrsh,
+    claimsToday,
+    remainingClaims: Math.max(0, GIFT_BOXES_PER_DAY - claimsToday),
+    totalRewardsClaimed: userData?.totalRewardsClaimed || 0
+  };
+} 
