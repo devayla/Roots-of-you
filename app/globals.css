@@ -1,33 +1,168 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --foreground-rgb: 0, 0, 0;
-  --background-start-rgb: 214, 219, 220;
-  --background-end-rgb: 255, 255, 255;
+  /* Premium Color Palette */
+  --forest-green: 77, 124, 54;
+  --bark-brown: 93, 64, 55;
+  --warm-cream: 255, 248, 240;
+  --soft-sage: 225, 247, 250;
+  --golden-sun: 255, 215, 0;
+  
+  /* Gradients */
+  --gradient-nature: linear-gradient(135deg, #e0f7fa 0%, #f1f8e9 50%, #fff3e0 100%);
+  --gradient-wood: linear-gradient(135deg, #5D4037 0%, #795548 50%, #3E2723 100%);
+  --gradient-premium: linear-gradient(135deg, #4d7c36 0%, #5D4037 100%);
+  
+  /* Shadows */
+  --shadow-soft: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-medium: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --shadow-large: 0 8px 32px rgba(0, 0, 0, 0.16);
+  --shadow-premium: 0 12px 48px rgba(77, 124, 54, 0.25);
+  
+  /* Glass Morphism */
+  --glass-bg: rgba(255, 255, 255, 0.85);
+  --glass-border: rgba(255, 255, 255, 0.3);
+  
+  /* Transitions */
+  --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-spring: all 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --foreground-rgb: 255, 255, 255;
-    --background-start-rgb: 0, 0, 0;
-    --background-end-rgb: 0, 0, 0;
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  body {
+    @apply font-sans antialiased;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+    background: var(--gradient-nature);
+    color: rgb(var(--bark-brown));
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-bold;
+    letter-spacing: -0.02em;
+  }
+  
+  button {
+    @apply transition-all duration-300 ease-out;
   }
 }
 
-body {
-  color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom,
-      transparent,
-      rgb(var(--background-end-rgb))
-    )
-    rgb(var(--background-start-rgb));
+@layer components {
+  /* Glass Morphism Card */
+  .glass-card {
+    background: var(--glass-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--shadow-medium);
+    border-radius: 1rem;
+  }
+  
+  /* Premium Button */
+  .btn-premium {
+    @apply px-6 py-3 rounded-full font-semibold text-white shadow-lg hover:shadow-xl transition-all duration-300;
+    background: var(--gradient-premium);
+    border: 2px solid rgba(255, 255, 255, 0.2);
+  }
+  
+  .btn-premium:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-premium);
+  }
+  
+  .btn-premium:active {
+    transform: translateY(0);
+  }
+  
+  /* Smooth Hover Card */
+  .hover-lift {
+    @apply transition-all duration-300 ease-out;
+  }
+  
+  .hover-lift:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-large);
+  }
+  
+  /* Premium Badge */
+  .badge-premium {
+    @apply px-4 py-1.5 rounded-full text-sm font-semibold;
+    background: linear-gradient(135deg, #ffd700 0%, #ff8c00 100%);
+    color: white;
+    box-shadow: 0 4px 12px rgba(255, 215, 0, 0.4);
+  }
+  
+  /* Nature Gradient Text */
+  .text-gradient-nature {
+    background: var(--gradient-premium);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
 }
 
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+  
+  /* Smooth Scroll */
+  .scroll-smooth {
+    scroll-behavior: smooth;
+  }
+  
+  /* Hide Scrollbar */
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  
+  /* Custom Animations */
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+  
+  @keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-20px); }
+  }
+  
+  .animate-glow {
+    animation: glow 2s ease-in-out infinite alternate;
+  }
+  
+  @keyframes glow {
+    from {
+      box-shadow: 0 0 10px rgba(77, 124, 54, 0.4);
+    }
+    to {
+      box-shadow: 0 0 20px rgba(77, 124, 54, 0.8), 0 0 30px rgba(77, 124, 54, 0.6);
+    }
+  }
+  
+  .animate-pulse-soft {
+    animation: pulse-soft 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  
+  @keyframes pulse-soft {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.7;
+    }
   }
 }

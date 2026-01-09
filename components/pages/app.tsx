@@ -224,13 +224,49 @@ export default function Home() {
   if (!isSDKLoaded) {
     return (
       <SafeAreaContainer insets={context?.client.safeAreaInsets}>
-        <div className="flex min-h-screen flex-col items-center justify-center p-4 space-y-8">
-          <h1 className="text-3xl font-bold text-center">
-            No farcaster SDK found, please use this miniapp in the farcaster app
-          </h1>
-          <button onClick={()=>{
-           window.open('https://farcaster.xyz/~/mini-apps/launch?domain=roots-of-you.vercel.app', '_blank')
-          }}>Open in Farcaster</button>
+        <div className="flex min-h-screen flex-col items-center justify-center p-6 bg-gradient-to-b from-[#e0f7fa] via-[#f1f8e9] to-[#fff3e0]">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6 }}
+            className="glass-card p-8 max-w-md text-center space-y-6"
+          >
+            {/* Tree Icon */}
+            <motion.div
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              transition={{ type: "spring", delay: 0.2, stiffness: 200 }}
+              className="flex justify-center"
+            >
+              <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#4d7c36] to-[#5D4037] flex items-center justify-center">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
+                  <path d="M12 22v-7m0 0l-3-3m3 3l3-3" />
+                  <path d="M12 2v7m0 0l-3 3m3-3l3 3" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              </div>
+            </motion.div>
+
+            <div className="space-y-3">
+              <h1 className="text-2xl font-bold text-[#5D4037]">
+                Farcaster Required
+              </h1>
+              <p className="text-[#795548] text-base leading-relaxed">
+                This app needs to run inside the Farcaster app to access your social graph and grow your tree.
+              </p>
+            </div>
+
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => {
+                window.open('https://farcaster.xyz/~/mini-apps/launch?domain=roots-of-you.vercel.app', '_blank')
+              }}
+              className="btn-premium w-full"
+            >
+              Open in Farcaster
+            </motion.button>
+          </motion.div>
         </div>
       </SafeAreaContainer>
     )

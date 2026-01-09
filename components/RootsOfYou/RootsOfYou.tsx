@@ -94,8 +94,18 @@ export function RootsOfYou({ userFid }: RootsOfYouProps) {
 
   if (!fid) {
     return (
-      <div className="w-screen  h-screen rounded-2xl overflow-hidden border-2 border-[#4d7c36]/30 shadow-2xl bg-gradient-to-b from-[#fff8f0] to-[#fdf5e6]">
-        <p className="text-lg">Please connect your Farcaster account to view your roots</p>
+      <div className="w-screen h-screen flex items-center justify-center bg-gradient-to-b from-[#e0f7fa] via-[#f1f8e9] to-[#fff3e0] p-6">
+        <div className="glass-card p-8 max-w-md text-center space-y-4">
+          <div className="w-16 h-16 mx-auto rounded-full bg-gradient-to-br from-[#4d7c36] to-[#5D4037] flex items-center justify-center">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 8v4" />
+              <path d="M12 16h.01" />
+            </svg>
+          </div>
+          <h2 className="text-xl font-bold text-[#5D4037]">Account Required</h2>
+          <p className="text-[#795548] text-sm">Please connect your Farcaster account to view your roots</p>
+        </div>
       </div>
     )
   }
@@ -127,16 +137,26 @@ export function RootsOfYou({ userFid }: RootsOfYouProps) {
 
   if (friendsError || usersError) {
     return (
-      <div className="w-screen  h-screen rounded-2xl overflow-hidden border-2 border-[#4d7c36]/30 shadow-2xl bg-gradient-to-b from-[#fff8f0] to-[#fdf5e6]">
-        <div className="text-center">
-          <p className="text-red-500 mb-2 font-semibold text-lg">Error growing tree</p>
-          <p className="text-sm text-gray-600">
-            {friendsError instanceof Error
-              ? friendsError.message
-              : usersError instanceof Error
-                ? usersError.message
-                : 'Unknown error'}
-          </p>
+      <div className="w-screen h-screen flex items-center justify-center bg-gradient-to-b from-[#e0f7fa] via-[#f1f8e9] to-[#fff3e0] p-6">
+        <div className="glass-card p-8 max-w-md text-center space-y-4">
+          <div className="w-16 h-16 mx-auto rounded-full bg-gradient-to-br from-red-500 to-red-600 flex items-center justify-center">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 8v4" />
+              <path d="M12 16h.01" />
+            </svg>
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-xl font-bold text-[#5D4037]">Oops! Something went wrong</h2>
+            <p className="text-[#795548] text-sm">
+              {friendsError instanceof Error
+                ? friendsError.message
+                : usersError instanceof Error
+                  ? usersError.message
+                  : 'Unable to grow your tree right now'}
+            </p>
+            <p className="text-xs text-[#795548]/70">Please try refreshing the page</p>
+          </div>
         </div>
       </div>
     )
@@ -194,7 +214,7 @@ export function RootsOfYou({ userFid }: RootsOfYouProps) {
               text: finalText,
               embeds: [websiteUrl, imageUrl || ''],
             })
-            
+
             // Track successful share in localStorage
             if (typeof window !== 'undefined' && context?.user?.fid) {
               try {
