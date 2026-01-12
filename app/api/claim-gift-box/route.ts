@@ -2,8 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { claimGiftBox } from '@/lib/database';
 import Pusher from 'pusher';
 
-// Initialize Pusher server instance (lazy initialization)
+// Initialize Pusher server instance (singleton pattern)
+let pusherInstance: Pusher | null = null;
+
 function getPusherInstance(): Pusher | null {
+  if (pusherInstance) return pusherInstance;
+
   const appId = process.env.PUSHER_APP_ID;
   const key = process.env.NEXT_PUBLIC_PUSHER_KEY;
   const secret = process.env.PUSHER_SECRET;
@@ -11,18 +15,19 @@ function getPusherInstance(): Pusher | null {
 
   // Validate all required credentials are present
   if (!appId || !key || !secret) {
-    console.warn('⚠️ Pusher credentials missing. Notifications will not be sent.', appId,key,secret,cluster);
+    console.warn('⚠️ Pusher credentials missing. Notifications will not be sent.');
     return null;
   }
 
   try {
-    return new Pusher({
+    pusherInstance = new Pusher({
       appId,
       key,
       secret,
       cluster,
       useTLS: true
     });
+    return pusherInstance;
   } catch (error) {
     console.error('❌ Failed to initialize Pusher:', error);
     return null;

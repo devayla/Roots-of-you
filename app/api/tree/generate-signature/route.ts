@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       )
     }
-console.log(metadataCid)
+
     const signerPrivateKey = process.env.SIGNER_PRIVATE_KEY
     const gateway = process.env.PINATA_GATEWAY || 'gateway.pinata.cloud'
 

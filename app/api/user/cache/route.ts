@@ -45,6 +45,10 @@ export async function GET(request: NextRequest) {
         success: true,
         data: cached.userData,
         cached: true,
+      }, {
+        headers: {
+          'Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=86400',
+        },
       })
     }
 
@@ -95,6 +99,10 @@ export async function GET(request: NextRequest) {
       success: true,
       data: user,
       cached: false,
+    }, {
+      headers: {
+        'Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=86400',
+      },
     })
   } catch (error) {
     console.error('Error in user cache API route:', error)
