@@ -19,14 +19,14 @@ const frame = {
 
 export async function generateMetadata(): Promise<Metadata> {
   return {
-    title: 'Roots of You',
+    title: 'Roots of You | Farcaster Social Tree',
     openGraph: {
-      title: 'Roots of You',
-      description: 'Your roots, your story',
+      title: 'Roots of You | Farcaster Social Tree',
+      description: 'Visualize your Farcaster connections as a unique, growing tree. Mint your social graph as a free NFT on Base.',
     },
     other: {
       'fc:frame': JSON.stringify(frame),
-    'base:app_id': '695be2eec63ad876c9082207',
+      'base:app_id': '695be2eec63ad876c9082207',
 
 
     },

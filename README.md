@@ -521,6 +521,7 @@ The interface has been significantly enhanced with a premium design system:
 -  **Enhanced Components**: Improved error states, loading screens, and user feedback with friendly messaging  
 -  **Premium Aesthetics**: Smooth animations, hover effects, and visual polish throughout
 -  **Better UX**: Consistent visual language, improved readability, and intuitive interactions
+-  **SEO Optimization**: Updated landing page metadata with rich descriptions and engaging titles for better social discovery.
 
 See [UI_IMPROVEMENTS.md](./UI_IMPROVEMENTS.md) for complete details on all enhancements.
 
