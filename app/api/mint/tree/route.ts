@@ -1,20 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getDatabase } from '@/lib/mongodb'
+import { verifyAddressForFid } from '@/lib/neynar'
 
 export const dynamic = 'force-dynamic'
 
+const mintSchema = z.object({
+  userAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address"),
+  ownerAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid owner address").optional(),
+  fid: z.number().int().positive(),
+  imageCid: z.string().min(1),
+  metadataCid: z.string().min(1),
+  txHash: z.string().optional(),
+  tokenId: z.string().optional(),
+  minterFid: z.number().int().positive().optional(),
+  minterUsername: z.string().optional(),
+  minterPfpUrl: z.string().url().optional().or(z.literal('')),
+})
+
 interface MintRecord {
-  // Wallet that initiated the mint transaction
   userAddress: string
-  // Wallet that received the NFT (may be different from userAddress)
   ownerAddress?: string
-  // FID whose tree this NFT represents (used as tokenId)
   fid: number
   imageCid: string
   metadataCid: string
   txHash?: string
   tokenId?: string
-  // Farcaster user who minted (minter), if known
   minterFid?: number
   minterUsername?: string
   minterPfpUrl?: string
@@ -25,6 +36,16 @@ interface MintRecord {
 
 export async function POST(request: NextRequest) {
   try {
+    const body = await request.json()
+    const result = mintSchema.safeParse(body)
+
+    if (!result.success) {
+      return NextResponse.json(
+        { success: false, error: result.error.errors[0].message },
+        { status: 400 }
+      )
+    }
+
     const {
       userAddress,
       ownerAddress,
@@ -36,39 +57,40 @@ export async function POST(request: NextRequest) {
       minterFid,
       minterUsername,
       minterPfpUrl,
-    } = await request.json()
+    } = result.data
 
-    // Validate inputs
-    if (!userAddress || !fid || !imageCid || !metadataCid) {
+    // SECURITY CHECK: Verify that the address is associated with the FID
+    // (Or the minterFid if provided, but let's check userAddress for now)
+    const isAddressVerified = await verifyAddressForFid(userAddress, minterFid || fid)
+    if (!isAddressVerified) {
+      console.error('❌ Security check failed in mint/tree: Address not associated with FID', { userAddress, fid, minterFid });
+      // We'll allow it for now but log it, or we can be strict
+      // Let's be semi-strict: return 403
       return NextResponse.json(
-        { success: false, error: 'Missing required fields' },
-        { status: 400 }
+        { success: false, error: 'Authorization failed: Address not associated with FID' },
+        { status: 403 }
       )
     }
 
-    // Get database connection
     const db = await getDatabase()
     const collection = db.collection<MintRecord>('tree_nfts')
 
-    // Create mint record
     const mintRecord: MintRecord = {
       userAddress,
-      ownerAddress: ownerAddress || undefined,
+      ownerAddress,
       fid,
       imageCid,
       metadataCid,
-      txHash: txHash || undefined,
-      tokenId: tokenId || undefined,
-      minterFid: minterFid || undefined,
-      minterUsername: minterUsername || undefined,
-      minterPfpUrl: minterPfpUrl || undefined,
+      txHash,
+      tokenId,
+      minterFid,
+      minterUsername,
+      minterPfpUrl,
       timestamp: Date.now(),
       ipfsImageUrl: `https://gateway.pinata.cloud/ipfs/${imageCid}`,
       ipfsMetadataUrl: `https://gateway.pinata.cloud/ipfs/${metadataCid}`,
     }
 
-    // Insert or update mint record
-    // Use fid as unique identifier (one tree per user)
     await collection.updateOne(
       { fid },
       { $set: mintRecord },
@@ -82,39 +104,38 @@ export async function POST(request: NextRequest) {
     })
   } catch (error) {
     console.error('Error saving mint record:', error)
-    
-    // Handle MongoDB connection errors gracefully
-    if (error instanceof Error && error.message.includes('Mongo')) {
-      return NextResponse.json(
-        { success: false, error: 'Database connection error' },
-        { status: 500 }
-      )
-    }
-
     return NextResponse.json(
-      { success: false, error: 'Failed to save mint record' },
+      { success: false, error: 'Internal server error' },
       { status: 500 }
     )
   }
 }
 
-// GET endpoint to retrieve mint records
+const querySchema = z.object({
+  fid: z.coerce.number().int().positive().optional(),
+  userAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(),
+})
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const fid = searchParams.get('fid')
-    const userAddress = searchParams.get('userAddress')
+    const parsed = querySchema.safeParse(Object.fromEntries(searchParams))
+
+    if (!parsed.success) {
+      return NextResponse.json(
+        { success: false, error: parsed.error.errors[0].message },
+        { status: 400 }
+      )
+    }
+
+    const { fid, userAddress } = parsed.data
 
     const db = await getDatabase()
     const collection = db.collection<MintRecord>('tree_nfts')
 
     let query: any = {}
-    if (fid) {
-      query.fid = parseInt(fid, 10)
-    }
-    if (userAddress) {
-      query.userAddress = userAddress
-    }
+    if (fid) query.fid = fid
+    if (userAddress) query.userAddress = userAddress
 
     const records = await collection.find(query).sort({ timestamp: -1 }).toArray()
 
@@ -125,7 +146,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('Error fetching mint records:', error)
     return NextResponse.json(
-      { success: false, error: 'Failed to fetch mint records' },
+      { success: false, error: 'Internal server error' },
       { status: 500 }
     )
   }

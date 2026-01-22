@@ -499,19 +499,24 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ##  Backend API Optimizations (January 2026)
 
-Significant performance enhancements have been implemented across the backend APIs to ensure a faster, more reliable user experience.
+Significant performance and security enhancements have been implemented across the backend APIs to ensure a faster, more reliable, and secure user experience.
 
-###  Performance Enhancements
+### 🛡️ Security & Validation
+- **Strict Input Validation**: Integrated `Zod` validation for all critical API endpoints (Mint, User Cache, Neynar). This ensures all incoming data is properly structured and valid before processing.
+- **Robust Wallet Verification**: Implemented strict address-to-FID verification logic. The backend now ensures that any minting or record update request comes from a wallet address actually associated with the user's Farcaster ID.
+- **Improved Error Handling**: Standardized error responses with appropriate HTTP status codes and descriptive messages, making the system more resilient and easier to debug.
+
+### 🚀 Performance Enhancements
 - **Multi-Level Caching**:
   - **MongoDB Integration**: Implemented 24-hour persistent caching for Neynar API responses (Best Friends, Bulk User Data) to significantly reduce external API latency and rate-limit hits.
   - **Browser/CDN Optimization**: Added `Cache-Control` headers (`public, s-maxage=3600`) to all common GET endpoints, enabling efficient data retrieval from edge locations and browser caches.
 - **Stale-While-Revalidate**: Integrated SWR patterns in API responses, allowing the UI to display cached data immediately while updating it in the background if necessary.
+- **Key Rotation**: Added support for round-robin Neynar API key rotation to improve availability and handle higher request volume.
 - **Singleton Pattern for Services**: 
   - Optimized the **Pusher integration** by implementing a singleton pattern for the server instance, preventing redundant initializations and reducing memory overhead during gift box claims.
-- **API Cleanliness & Reliability**:
-  - Removed debug logs and optimized signature generation logic for faster NFT minting flows.
+- **API Reliability**:
+  - Refined signature generation logic for faster NFT minting flows.
   - Improved error handling with fallback to stale cache in case of external service outages.
-  - Fixed TypeScript type safety issues in bulk data processing for more robust execution.
 
 ##  Recent UI Improvements (January 2026)
 

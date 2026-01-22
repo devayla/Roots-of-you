@@ -1,104 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getDatabase } from '@/lib/mongodb'
-import { getNeynarApiKey, NEYNAR_API_BASE_URL } from '@/lib/neynar'
-import type { NeynarUser } from '@/types/neynar'
+import { z } from 'zod'
+import { getUserData } from '@/lib/neynar'
 
 export const dynamic = 'force-dynamic'
 
-interface CachedUser {
-  fid: number
-  userData: NeynarUser
-  cachedAt: number
-}
+const querySchema = z.object({
+  fid: z.coerce.number().int().positive(),
+})
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const fid = searchParams.get('fid')
+    const parsed = querySchema.safeParse(Object.fromEntries(searchParams))
 
-    if (!fid) {
+    if (!parsed.success) {
       return NextResponse.json(
-        { error: 'fid query parameter is required' },
+        { error: parsed.error.errors[0].message },
         { status: 400 }
       )
     }
 
-    const fidNumber = parseInt(fid, 10)
-    if (isNaN(fidNumber)) {
-      return NextResponse.json(
-        { error: 'Invalid fid' },
-        { status: 400 }
-      )
-    }
+    const { fid } = parsed.data
 
-    // Get database connection
-    const db = await getDatabase()
-    const collection = db.collection<CachedUser>('cached_users')
-
-    // Check if user exists in cache (cache valid for 24 hours)
-    const cached = await collection.findOne({ fid: fidNumber })
-    const now = Date.now()
-    const cacheExpiry = 24 * 60 * 60 * 1000 // 24 hours
-
-    if (cached && (now - cached.cachedAt) < cacheExpiry) {
-      return NextResponse.json({
-        success: true,
-        data: cached.userData,
-        cached: true,
-      }, {
-        headers: {
-          'Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=86400',
-        },
-      })
-    }
-
-    // Fetch from Neynar API
-    const apiKey = getNeynarApiKey()
-    const url = `${NEYNAR_API_BASE_URL}/user/bulk/?fids=${fidNumber}`
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'x-api-key': apiKey,
-      },
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error('Neynar API error:', errorText)
-      return NextResponse.json(
-        { error: 'Failed to fetch user from Neynar API' },
-        { status: response.status }
-      )
-    }
-
-    const data = await response.json()
-    const user = data.users?.[0]
+    const user = await getUserData(fid)
 
     if (!user) {
       return NextResponse.json(
-        { error: 'User not found' },
+        { error: 'User not found or failed to fetch' },
         { status: 404 }
       )
     }
 
-    // Save to cache
-    await collection.updateOne(
-      { fid: fidNumber },
-      {
-        $set: {
-          fid: fidNumber,
-          userData: user,
-          cachedAt: now,
-        },
-      },
-      { upsert: true }
-    )
-
     return NextResponse.json({
       success: true,
       data: user,
-      cached: false,
     }, {
       headers: {
         'Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=86400',
@@ -106,12 +41,6 @@ export async function GET(request: NextRequest) {
     })
   } catch (error) {
     console.error('Error in user cache API route:', error)
-    if (error instanceof Error && error.message.includes('NEYNAR_API_KEY')) {
-      return NextResponse.json(
-        { error: error.message },
-        { status: 500 }
-      )
-    }
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
